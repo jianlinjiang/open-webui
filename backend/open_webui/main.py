@@ -8,7 +8,7 @@ import shutil
 import sys
 import time
 import random
-
+import httpx
 from contextlib import asynccontextmanager
 from urllib.parse import urlencode, parse_qs, urlparse
 from pydantic import BaseModel
@@ -1369,6 +1369,66 @@ async def healthcheck_with_db():
     Session.execute(text("SELECT 1;")).all()
     return {"status": True}
 
+
+@app.get("/api/v1/tee/quote")
+async def fetch_tee_quote(request: Request, response: Response):
+    from datetime import datetime
+    import uuid
+
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    client = httpx.AsyncClient(timeout=3.0)
+    nonce = request.query_params.get("nonce")
+    if not nonce:
+        raise HTTPException(status_code=400, detail="Missing 'nonce' query parameter.")
+    TARGET_ATTEST_SERVICE_URL = f"http://34.60.75.165:8085/v1/api/attest?nonce={nonce}"
+    log.info(
+        f"attest url '{TARGET_ATTEST_SERVICE_URL}'."
+    )
+
+    try:
+        target_response = await client.get(
+            TARGET_ATTEST_SERVICE_URL
+        )
+        target_response.raise_for_status()
+    except httpx.RequestError as e:
+        log.error(f"Failed to connect to attest service at {e.request.url}: {e}")
+        raise HTTPException(
+            status_code=503,
+            detail=f"Could not connect to the internal attestation service."
+        )
+    except httpx.HTTPStatusError as e:
+        log.error(f"Internal attest service returned an error: {e.response.status_code} - {e.response.text}")
+        raise HTTPException(
+            status_code=e.response.status_code,
+            detail=f"Internal attestation service failed: {e.response.text}"
+        )
+    try:
+        log.info(
+            f"response '{target_response.text}'."
+        )
+        
+        target_data = target_response.json()
+        # 假设目标服务返回的 JSON 格式是 {"quote": "...", ...}
+        quote = target_data.get("TdQuote")
+        cc_eventlog = target_data.get("CcelData")
+        container_eventlog = target_data.get("CanonicalEventLog")
+    except ValueError: # JSONDecodeError
+        log.error(f"Failed to parse JSON response from attestation service. Response text: {target_response.text}")
+        raise HTTPException(status_code=500, detail="Failed to parse response from attestation service.")
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    result = {
+        "quote": quote,
+        "cc_eventlog": cc_eventlog, 
+        "container_eventlog": container_eventlog,
+        "timestamp": datetime.utcnow().isoformat(),
+        "id": str(uuid.uuid4()),
+        "status": True
+    }
+    return result
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 app.mount("/cache", StaticFiles(directory=CACHE_DIR), name="cache")

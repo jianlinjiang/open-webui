@@ -1052,3 +1052,18 @@ export const archiveAllChats = async (token: string) => {
 
 	return res;
 };
+// New API to query quote from backend API service
+export const getQuote = async (token: string, chatId: string): Promise<any> => {
+	const nonce = chatId.replace(/-/g, '').padStart(128, '0');
+	const res = await fetch(`${WEBUI_API_BASE_URL}/tee/quote?nonce=${nonce}`, {
+		method: 'GET',
+		headers: {
+			Accept: 'application/json',
+			'Content-Type': 'application/json',
+			...(token && {authorization: `Bearer ${token}`})
+		}
+	});
+
+	const resJson = await res.json();
+	return resJson;
+};
